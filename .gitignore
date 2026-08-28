@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+target/
+*.class
+
+# Environment
+.env
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# Build artifacts
+dist/
+build/
+*.jar
+
+# Docker volumes
+postgres_data/
+
+# Logs
+*.log

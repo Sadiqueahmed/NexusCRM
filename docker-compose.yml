@@ -1,0 +1,154 @@
+# =============================================================================
+# NexusCRM — Docker Compose Ecosystem
+# =============================================================================
+# Spins up the complete Agentic CRM stack with a single command:
+#   docker compose up --build
+#
+# Services:
+#   - postgres    : PostgreSQL 16 with pgvector extension (port 5432)
+#   - pgadmin     : pgAdmin 4 web UI (port 5050)
+#   - backend     : Spring Boot Core API (port 8080)
+#   - ai-service  : FastAPI + LangChain AI Agent (port 8000)
+#   - frontend    : React Dashboard via Nginx (port 3000)
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 with pgvector extension for hybrid relational + vector storage
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: nexuscrm-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-nexuscrm}
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus_secret_2024}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d  # Auto-runs init SQL on first start
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nexus} -d ${POSTGRES_DB:-nexuscrm}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - nexuscrm-network
+
+  # ---------------------------------------------------------------------------
+  # pgAdmin 4 — Web-based database management UI
+  # ---------------------------------------------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: nexuscrm-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@nexuscrm.io}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - nexuscrm-network
+
+  # ---------------------------------------------------------------------------
+  # Spring Boot Core API — CRM data operations + SSE event broadcasting
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend-java
+      dockerfile: Dockerfile
+    container_name: nexuscrm-backend
+    restart: unless-stopped
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-nexuscrm}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-nexus}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-nexus_secret_2024}
+      SPRING_JPA_HIBERNATE_DDL_AUTO: validate
+      SERVER_PORT: 8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - nexuscrm-network
+
+  # ---------------------------------------------------------------------------
+  # Python AI Microservice — LangChain Agent with RAG + Agentic Tool Calling
+  # ---------------------------------------------------------------------------
+  ai-service:
+    build:
+      context: ./ai-service-python
+      dockerfile: Dockerfile
+    container_name: nexuscrm-ai-service
+    restart: unless-stopped
+    environment:
+      # LLM Configuration
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}  # anthropic or openai
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-4-20250514}
+
+      # Database (for pgvector RAG)
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-nexus}:${POSTGRES_PASSWORD:-nexus_secret_2024}@postgres:5432/${POSTGRES_DB:-nexuscrm}
+      DATABASE_URL_SYNC: postgresql://${POSTGRES_USER:-nexus}:${POSTGRES_PASSWORD:-nexus_secret_2024}@postgres:5432/${POSTGRES_DB:-nexuscrm}
+
+      # Spring Boot backend URL (internal Docker network)
+      CRM_API_BASE_URL: http://backend:8080/api/v1
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - nexuscrm-network
+
+  # ---------------------------------------------------------------------------
+  # React Frontend Dashboard — Nginx-served SPA with SSE integration
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend-react
+      dockerfile: Dockerfile
+    container_name: nexuscrm-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    networks:
+      - nexuscrm-network
+
+# =============================================================================
+# Volumes & Networks
+# =============================================================================
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  nexuscrm-network:
+    driver: bridge
