@@ -18,6 +18,7 @@ services:
   # ---------------------------------------------------------------------------
   postgres:
     image: pgvector/pgvector:pg16
+    platform: linux/arm64
     container_name: nexuscrm-postgres
     restart: unless-stopped
     environment:
